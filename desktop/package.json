@@ -11,5 +11,8 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
+  },
+  "dependencies": {
+    "meshmonitor": "file:.."
   }
 }

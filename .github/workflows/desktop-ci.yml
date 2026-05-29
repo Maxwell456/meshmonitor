@@ -6,13 +6,21 @@ on:
       - main
       - 'feature/desktop*'
     paths:
+      - 'src/**'
       - 'desktop/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'protobufs/**'
       - '.github/workflows/desktop-ci.yml'
   pull_request:
     branches:
       - main
     paths:
+      - 'src/**'
       - 'desktop/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'protobufs/**'
       - '.github/workflows/desktop-ci.yml'
   workflow_dispatch:
 
@@ -22,6 +30,8 @@ env:
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -72,6 +82,7 @@ jobs:
           mkdir desktop\resources\binaries
           xcopy /E /I /Y dist\server desktop\resources\dist\server
           xcopy /E /I /Y dist\services desktop\resources\dist\services
+          xcopy /E /I /Y dist\db desktop\resources\dist\db
           xcopy /E /I /Y dist\utils desktop\resources\dist\utils
           xcopy /E /I /Y dist\types desktop\resources\dist\types
           xcopy /E /I /Y dist\config desktop\resources\dist\config
@@ -108,6 +119,11 @@ jobs:
           }
         shell: pwsh
 
+      - name: Rebuild better-sqlite3 for bundled Node 24
+        working-directory: desktop/resources/dist/node_modules/better-sqlite3
+        run: npx prebuild-install --runtime=node --target=24.12.0 --arch=x64 --platform=win32
+        shell: pwsh
+
       - name: Run Rust linting
         working-directory: desktop/src-tauri
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -116,17 +132,32 @@ jobs:
         working-directory: desktop/src-tauri
         run: cargo test --verbose
 
-      - name: Build Tauri app (debug)
+      - name: Build Tauri app (release)
         working-directory: desktop
-        run: npm run tauri:build -- --debug
+        run: npm run tauri:build
 
-      - name: Upload build artifact
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v7
         with:
-          name: meshmonitor-desktop-windows-debug
-          path: desktop/src-tauri/target/debug/bundle/
-          retention-days: 7
+          name: meshmonitor-desktop-windows-${{ github.sha }}
+          path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+          retention-days: 30
           if-no-files-found: warn
+
+      - name: Publish to latest pre-release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: latest
+          name: "Latest Build"
+          prerelease: true
+          body: |
+            Автосборка по последнему коммиту в `main`.
+            Commit: ${{ github.sha }}
+            ${{ github.event.head_commit.message }}
+          files: desktop/src-tauri/target/release/bundle/nsis/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
     runs-on: macos-latest

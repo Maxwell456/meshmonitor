@@ -10,7 +10,7 @@ interface AutoBotSectionProps {
   baseUrl: string;
 }
 
-type BotProvider = 'openai' | 'ollama' | 'openrouter';
+type BotProvider = 'openai' | 'claude';
 
 interface BotSettings {
   enabled: boolean;
@@ -37,7 +37,7 @@ const DEFAULT_SETTINGS: BotSettings = {
   apiKey: '',
   apiUrl: '',
   model: 'gpt-4o-mini',
-  systemPrompt: 'You are a helpful assistant on a Meshtastic mesh radio network. Keep responses very short (under 200 chars). The user is {LONG_NAME} ({SHORT_NAME}).',
+  systemPrompt: 'You are a helpful assistant on a Meshtastic mesh radio network. The user is {LONG_NAME} ({SHORT_NAME}). Reply in plain text, no markdown, under 100 characters.',
   maxTokens: 150,
   maxChars: 200,
   temperature: 0.7,
@@ -57,17 +57,11 @@ const PROVIDER_PRESETS: Record<BotProvider, { label: string; defaultUrl: string;
     defaultModel: 'gpt-4o-mini',
     placeholder: 'sk-...',
   },
-  ollama: {
-    label: 'Ollama (local)',
-    defaultUrl: 'http://localhost:11434/v1',
-    defaultModel: 'llama3.2',
-    placeholder: 'ollama (no key needed)',
-  },
-  openrouter: {
-    label: 'OpenRouter',
-    defaultUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'google/gemini-flash-1.5',
-    placeholder: 'sk-or-...',
+  claude: {
+    label: 'Claude (Anthropic)',
+    defaultUrl: '',
+    defaultModel: 'claude-haiku-4-5-20251001',
+    placeholder: 'sk-ant-...',
   },
 };
 
@@ -105,7 +99,7 @@ const AutoBotSection: React.FC<AutoBotSectionProps> = ({ channels, baseUrl }) =>
 
         const loaded: BotSettings = {
           enabled: bool('botEnabled', false),
-          provider: (s.botProvider as BotProvider) || 'openai',
+          provider: (['openai', 'claude'].includes(s.botProvider) ? s.botProvider : 'openai') as BotProvider,
           apiKey: s.botApiKey || '',
           apiUrl: s.botApiUrl || '',
           model: s.botModel || 'gpt-4o-mini',
@@ -340,18 +334,20 @@ const AutoBotSection: React.FC<AutoBotSectionProps> = ({ channels, baseUrl }) =>
             </div>
           </div>
 
-          <div style={{ marginTop: '0.75rem' }}>
-            <label style={label}>API URL</label>
-            <input
-              type="text"
-              value={local.apiUrl || preset.defaultUrl}
-              onChange={e => update('apiUrl', e.target.value)}
-              disabled={!local.enabled}
-              style={{ ...input, fontFamily: 'monospace' }}
-              placeholder={preset.defaultUrl}
-            />
-            <div style={desc}>Leave default for standard endpoints. Change for custom proxies.</div>
-          </div>
+          {local.provider === 'openai' && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <label style={label}>API URL</label>
+              <input
+                type="text"
+                value={local.apiUrl || preset.defaultUrl}
+                onChange={e => update('apiUrl', e.target.value)}
+                disabled={!local.enabled}
+                style={{ ...input, fontFamily: 'monospace' }}
+                placeholder={preset.defaultUrl}
+              />
+              <div style={desc}>Leave default for standard endpoints. Change for custom proxies.</div>
+            </div>
+          )}
 
           <div style={{ marginTop: '0.75rem' }}>
             <label style={label}>API Key</label>
@@ -376,11 +372,6 @@ const AutoBotSection: React.FC<AutoBotSectionProps> = ({ channels, baseUrl }) =>
                 {showApiKey ? '🙈 Hide' : '👁 Show'}
               </button>
             </div>
-            {local.provider === 'ollama' && (
-              <div style={{ ...desc, color: 'var(--ctp-green)', marginTop: '0.3rem' }}>
-                Ollama runs locally — no API key needed
-              </div>
-            )}
           </div>
         </div>
 

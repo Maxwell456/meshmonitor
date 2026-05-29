@@ -38,6 +38,7 @@ import { validateCron, scheduleCron, type CronJob } from './utils/cronScheduler.
 import fs from 'fs';
 import path from 'path';
 import * as net from 'net';
+import { getBotResponse, splitIntoPackets, type BotSettings, type ChatMessage } from './services/aiBotService.js';
 
 const POST_RESET_COOLDOWN_MS = 5000;
 const TCP_READY_TIMEOUT_MS = 15000;
@@ -631,6 +632,8 @@ class MeshtasticManager implements ISourceManager {
   private autoAckProcessedPackets: Set<number> = new Set(); // packetIds already auto-acked (dedup guard)
   private autoResponderCooldowns: Map<string, number> = new Map(); // "triggerIndex:nodeNum" -> lastResponseTimestamp
   private autoResponderProcessedPackets: Set<number> = new Set(); // packetIds already auto-responded (dedup guard)
+  private botCooldowns: Map<number, number> = new Map(); // nodeNum -> lastResponseTimestamp
+  private botProcessedPackets: Set<number> = new Set(); // packetIds already bot-processed (dedup guard)
 
   // Auto-ping session tracking
   private autoPingSessions: Map<number, AutoPingSession> = new Map(); // keyed by requester nodeNum
@@ -5261,6 +5264,9 @@ class MeshtasticManager implements ISourceManager {
 
           // Auto-respond to matching messages
           await this.checkAutoResponder(message, isDirectMessage, meshPacket.id);
+
+          // AI bot reply
+          await this.checkAiBot(message, isDirectMessage, meshPacket.id);
         } else {
           logger.debug(`⏭️ Skipped duplicate message ${message.id} (echo from device)`);
         }
@@ -8829,7 +8835,7 @@ class MeshtasticManager implements ISourceManager {
         const receivedTime = formatTime(timestamp, timeFormat as '12' | '24');
 
         // Replace tokens in the message template
-        const ackText = await this.replaceAcknowledgementTokens(autoAckMessage, message.fromNodeId, fromNum, hopsTraveled, receivedDate, receivedTime, channelIndex, isDirectMessage, rxSnr, rxRssi, message.viaMqtt);
+        const ackText = await this.replaceAcknowledgementTokens(autoAckMessage, message.fromNodeId, fromNum, hopsTraveled, receivedDate, receivedTime, channelIndex, isDirectMessage, rxSnr, rxRssi, message.viaMqtt, message.relayNode);
 
         // Don't make it a reply if we're changing channels (DM when triggered by channel message)
         const replyId = (alwaysUseDM && !isDirectMessage) ? undefined : packetId;
@@ -9542,7 +9548,7 @@ class MeshtasticManager implements ISourceManager {
             url = await this.replaceAcknowledgementTokens(
               url, nodeId, message.fromNodeNum, hopsTraveled,
               receivedDate, receivedTime, message.channel, isDirectMessage,
-              message.rxSnr, message.rxRssi, message.viaMqtt, true
+              message.rxSnr, message.rxRssi, message.viaMqtt, message.relayNode, true
             );
 
             logger.debug(`🌐 Fetching HTTP response from: ${url}`);
@@ -9573,7 +9579,7 @@ class MeshtasticManager implements ISourceManager {
               logger.debug(`📥 HTTP response received: ${responseText.substring(0, 50)}...`);
 
               // Replace Auto Acknowledge tokens in HTTP response (Issue #1159)
-              responseText = await this.replaceAcknowledgementTokens(responseText, nodeId, message.fromNodeNum, hopsTraveled, receivedDate, receivedTime, message.channel, isDirectMessage, message.rxSnr, message.rxRssi, message.viaMqtt);
+              responseText = await this.replaceAcknowledgementTokens(responseText, nodeId, message.fromNodeNum, hopsTraveled, receivedDate, receivedTime, message.channel, isDirectMessage, message.rxSnr, message.rxRssi, message.viaMqtt, message.relayNode);
             } catch (error: any) {
               if (error.name === 'AbortError') {
                 logger.debug('⏭️  HTTP request timed out after 5 seconds');
@@ -9651,7 +9657,7 @@ class MeshtasticManager implements ISourceManager {
                 const expandedArgs = await this.replaceAcknowledgementTokens(
                   trigger.scriptArgs, nodeId, message.fromNodeNum, hopsTraveled,
                   receivedDate, receivedTime, message.channel, isDirectMessage,
-                  message.rxSnr, message.rxRssi, message.viaMqtt
+                  message.rxSnr, message.rxRssi, message.viaMqtt, message.relayNode
                 );
                 scriptArgsList = this.parseScriptArgs(expandedArgs);
                 logger.debug(`🤖 Script args expanded: ${trigger.scriptArgs} -> ${JSON.stringify(scriptArgsList)}`);
@@ -9881,7 +9887,7 @@ class MeshtasticManager implements ISourceManager {
             });
 
             // Replace Auto Acknowledge tokens in text response (Issue #1159)
-            responseText = await this.replaceAcknowledgementTokens(responseText, nodeId, message.fromNodeNum, hopsTraveled, receivedDate, receivedTime, message.channel, isDirectMessage, message.rxSnr, message.rxRssi, message.viaMqtt);
+            responseText = await this.replaceAcknowledgementTokens(responseText, nodeId, message.fromNodeNum, hopsTraveled, receivedDate, receivedTime, message.channel, isDirectMessage, message.rxSnr, message.rxRssi, message.viaMqtt, message.relayNode);
           }
 
           const multilineEnabled = trigger.multiline || false;
@@ -11042,7 +11048,7 @@ class MeshtasticManager implements ISourceManager {
     return this.replaceAnnouncementTokens(message);
   }
 
-  private async replaceAcknowledgementTokens(message: string, nodeId: string, fromNum: number, numberHops: number, date: string, time: string, channelIndex: number, isDirectMessage: boolean, rxSnr?: number, rxRssi?: number, viaMqtt?: boolean, urlEncode: boolean = false): Promise<string> {
+  private async replaceAcknowledgementTokens(message: string, nodeId: string, fromNum: number, numberHops: number, date: string, time: string, channelIndex: number, isDirectMessage: boolean, rxSnr?: number, rxRssi?: number, viaMqtt?: boolean, relayNode?: number, urlEncode: boolean = false): Promise<string> {
     // Start with base announcement tokens (includes {IP}, {PORT}, {VERSION}, {DURATION}, {FEATURES}, {NODECOUNT}, {DIRECTCOUNT})
     let result = await this.replaceAnnouncementTokens(message, urlEncode);
     const encode = (v: string) => urlEncode ? encodeURIComponent(v) : v;
@@ -11128,6 +11134,28 @@ class MeshtasticManager implements ISourceManager {
     if (result.includes('{TRANSPORT}')) {
       const transport = viaMqtt === true ? 'MQTT' : 'LoRa';
       result = result.replace(/{TRANSPORT}/g, encode(transport));
+    }
+
+    // {RELAY_NODE} - Last 2 bytes of relay node ID as hex (e.g. "b920"), empty if direct
+    if (result.includes('{RELAY_NODE}')) {
+      const val = (relayNode && numberHops > 0)
+        ? relayNode.toString(16).padStart(4, '0')
+        : '';
+      result = result.replace(/{RELAY_NODE}/g, encode(val));
+    }
+
+    // {RELAY_NAME} - Short name of relay node, fallback to hex, empty if direct
+    if (result.includes('{RELAY_NAME}')) {
+      let val = '';
+      if (relayNode && numberHops > 0) {
+        try {
+          const relayNodeObj = await databaseService.nodes.getNodeByRelayId(relayNode, this.sourceId);
+          val = relayNodeObj?.shortName || relayNode.toString(16).padStart(4, '0');
+        } catch {
+          val = relayNode.toString(16).padStart(4, '0');
+        }
+      }
+      result = result.replace(/{RELAY_NAME}/g, encode(val));
     }
 
     return result;
@@ -13575,6 +13603,170 @@ class MeshtasticManager implements ISourceManager {
         // Penalize link quality for failed traceroute (-2)
         this.handleTracerouteFailure(nodeNum);
       }
+    }
+  }
+
+  private async checkAiBot(message: TextMessage, isDirectMessage: boolean, packetId?: number): Promise<void> {
+    try {
+      if (packetId != null) {
+        if (this.botProcessedPackets.has(packetId)) return;
+        this.botProcessedPackets.add(packetId);
+        if (this.botProcessedPackets.size > 1000) {
+          const entries = Array.from(this.botProcessedPackets);
+          this.botProcessedPackets = new Set(entries.slice(-500));
+        }
+      }
+
+      const settings = databaseService.settings;
+      const sourceId = this.sourceId;
+
+      const botEnabled = await settings.getSettingForSource(sourceId, 'botEnabled');
+      if (botEnabled !== 'true') return;
+
+      // Skip own messages
+      const localNodeNum = this.localNodeInfo?.nodeNum?.toString()
+        ?? await settings.getSetting(this.localNodeSettingKey('localNodeNum'));
+      if (localNodeNum && parseInt(localNodeNum) === message.fromNodeNum) return;
+
+      const triggerWord = (await settings.getSettingForSource(sourceId, 'botTriggerWord') || 'bot').toLowerCase().trim();
+      const listenDM = await settings.getSettingForSource(sourceId, 'botListenDM');
+      const listenChannelsRaw = await settings.getSettingForSource(sourceId, 'botListenChannels');
+      const skipIncomplete = await settings.getSettingForSource(sourceId, 'botSkipIncompleteNodes');
+      const cooldownSeconds = parseInt(await settings.getSettingForSource(sourceId, 'botCooldownSeconds') || '30');
+      const contextCount = parseInt(await settings.getSettingForSource(sourceId, 'botContextMessages') || '3');
+      const appendNodeInfo = await settings.getSettingForSource(sourceId, 'botAppendNodeInfo');
+
+      const listenChannels: number[] = listenChannelsRaw ? JSON.parse(listenChannelsRaw) : [0];
+
+      const text = message.text?.trim() ?? '';
+      const textLower = text.toLowerCase();
+
+      // Determine if this message should trigger the bot
+      const isDM = isDirectMessage;
+      const channelMatch = listenChannels.includes(message.channel);
+      const triggerMatch = textLower.startsWith(triggerWord + ' ') || textLower === triggerWord;
+      const dmNoTrigger = isDM && listenDM === 'true';
+
+      if (!dmNoTrigger && !(channelMatch && triggerMatch)) return;
+
+      // Skip incomplete nodes if configured
+      if (skipIncomplete === 'true') {
+        const fromNode = await databaseService.nodes.getNode(message.fromNodeNum, sourceId);
+        if (!fromNode || !fromNode.longName) return;
+      }
+
+      // Cooldown check
+      if (cooldownSeconds > 0) {
+        const lastReply = this.botCooldowns.get(message.fromNodeNum);
+        if (lastReply && (Date.now() - lastReply) < cooldownSeconds * 1000) {
+          logger.debug(`🤖 Bot cooldown active for node ${message.fromNodeNum}`);
+          return;
+        }
+      }
+
+      // Extract user query (strip trigger word for channel messages)
+      const userQuery = (!isDM && triggerMatch)
+        ? text.slice(triggerWord.length).trim()
+        : text;
+
+      if (!userQuery) return;
+
+      // Load AI settings
+      const provider = (await settings.getSettingForSource(sourceId, 'botProvider') || 'openai') as 'openai' | 'claude';
+      const apiKey = await settings.getSettingForSource(sourceId, 'botApiKey') || '';
+      const apiUrl = await settings.getSettingForSource(sourceId, 'botApiUrl') || '';
+      const model = await settings.getSettingForSource(sourceId, 'botModel') || (provider === 'claude' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini');
+      const systemPrompt = await settings.getSettingForSource(sourceId, 'botSystemPrompt') || 'You are a helpful assistant on a Meshtastic mesh radio network. Keep responses very short (under 200 chars).';
+      const maxTokens = parseInt(await settings.getSettingForSource(sourceId, 'botMaxTokens') || '150');
+      const maxChars = parseInt(await settings.getSettingForSource(sourceId, 'botMaxChars') || '200');
+      const temperature = parseFloat(await settings.getSettingForSource(sourceId, 'botTemperature') || '0.7');
+
+      if (!apiKey) {
+        logger.warn('🤖 AI bot has no API key configured, skipping');
+        return;
+      }
+
+      // Build system prompt with node substitutions
+      const fromNode = await databaseService.nodes.getNode(message.fromNodeNum, sourceId);
+      const allNodes = await databaseService.nodes.getAllNodes(sourceId);
+      const filledPrompt = systemPrompt
+        .replace('{LONG_NAME}', fromNode?.longName || 'Unknown')
+        .replace('{SHORT_NAME}', fromNode?.shortName || '???')
+        .replace('{NODECOUNT}', String(allNodes?.length ?? 0));
+
+      // Build node context: mesh-wide stats + relay-byte mapping for relay identification.
+      // Relay byte = last byte of nodeNum (e.g. nodeNum 0xa1b2c371 → relay id "71").
+      // Meshtastic firmware identifies relay nodes by this last byte in routing packets.
+      const now = Math.floor(Date.now() / 1000);
+      const ONLINE_WINDOW_SEC = 30 * 60;
+      const onlineNodes = allNodes.filter(n => n.lastHeard && (now - n.lastHeard) < ONLINE_WINDOW_SEC);
+
+      const ctxParts: string[] = [];
+      if (fromNode) {
+        const nodeDesc = fromNode.longName || fromNode.shortName || fromNode.nodeId;
+        const fromParts = [`From: ${nodeDesc}`];
+        if (appendNodeInfo === 'true') {
+          if (message.rxSnr != null) fromParts.push(`SNR:${message.rxSnr}dB`);
+          if (message.rxRssi != null) fromParts.push(`RSSI:${message.rxRssi}dBm`);
+        }
+        ctxParts.push(fromParts.join(' '));
+      }
+      ctxParts.push(`Mesh: ${allNodes.length} known nodes, ${onlineNodes.length} online (last 30min)`);
+      const nodeLines = onlineNodes.slice(0, 25).map(n => {
+        const name = n.longName || n.shortName || n.nodeId;
+        const relayByte = (n.nodeNum & 0xFF).toString(16).padStart(2, '0');
+        const hops = n.hopsAway != null ? ` ${n.hopsAway}h` : '';
+        const snr = n.snr != null ? ` SNR:${n.snr.toFixed(0)}` : '';
+        return `${name}(relay:${relayByte}${hops}${snr})`;
+      });
+      if (nodeLines.length > 0) ctxParts.push('Nodes: ' + nodeLines.join(', '));
+      const nodeContext: string = ctxParts.join('\n');
+
+      // Fetch recent context messages
+      const contextMessages: ChatMessage[] = [];
+      if (contextCount > 0) {
+        try {
+          const recent = isDM
+            ? await databaseService.messages.getDirectMessages(message.fromNodeId, message.toNodeId, contextCount + 1, 0, sourceId)
+            : await databaseService.messages.getMessagesByChannel(message.channel, contextCount + 1, 0, sourceId);
+
+          const localId = localNodeNum ? parseInt(localNodeNum) : undefined;
+          for (const m of [...recent].reverse().slice(0, contextCount)) {
+            if (m.id === message.id) continue;
+            const role: 'user' | 'assistant' = (localId && m.fromNodeNum === localId) ? 'assistant' : 'user';
+            contextMessages.push({ role, content: m.text ?? '' });
+          }
+        } catch {
+          // context is optional — proceed without it
+        }
+      }
+
+      // Allow up to 2 Meshtastic packets (~228 bytes each).
+      // Cyrillic is 2 bytes/char, so ~200 chars covers both packets.
+      const meshConstraint = `\nCRITICAL: Reply in plain text only. No markdown, no bullet lists, no bold. Max ~200 characters total (may be split across 2 short messages automatically).`;
+      const botSettings: BotSettings = { provider, apiKey, apiUrl, model, systemPrompt: filledPrompt + meshConstraint, maxTokens, maxChars, temperature };
+
+      logger.info(`🤖 AI bot responding to node ${message.fromNodeNum} via ${provider}/${model}`);
+
+      const reply = await getBotResponse({ settings: botSettings, userMessage: userQuery, context: contextMessages, nodeContext });
+
+      if (!reply) return;
+
+      const packets = splitIntoPackets(reply, 2);
+      for (let i = 0; i < packets.length; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, 2000));
+        if (isDM) {
+          await this.sendTextMessage(packets[i], 0, message.fromNodeNum);
+        } else {
+          await this.sendTextMessage(packets[i], message.channel);
+        }
+      }
+      // Set cooldown after all packets are sent so the timer reflects the last reply
+      this.botCooldowns.set(message.fromNodeNum, Date.now());
+      logger.info(`🤖 AI bot replied (${reply.length} chars, ${packets.length} packet(s)) to node ${message.fromNodeNum} via ${isDM ? 'DM' : `channel ${message.channel}`}`);
+
+    } catch (err) {
+      logger.error('❌ AI bot error:', err);
     }
   }
 }

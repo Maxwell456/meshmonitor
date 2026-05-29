@@ -225,6 +225,25 @@ export class NodesRepository extends BaseRepository {
   }
 
   /**
+   * Find a node by the last 2 bytes of its nodeNum (the relay_node field value).
+   * relayNode is the lower 16 bits of the full 32-bit nodeNum.
+   */
+  async getNodeByRelayId(relayNode: number, sourceId: string): Promise<DbNode | null> {
+    const { nodes } = this.tables;
+    const result = await this.db
+      .select()
+      .from(nodes)
+      .where(and(
+        sql`(${nodes.nodeNum} & 65535) = ${relayNode}`,
+        eq(nodes.sourceId, sourceId)
+      ))
+      .limit(1);
+
+    if (result.length === 0) return null;
+    return this.normalizeBigInts(result[0]) as DbNode;
+  }
+
+  /**
    * Get all nodes ordered by update time
    */
   async getAllNodes(sourceId?: string): Promise<DbNode[]> {

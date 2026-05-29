@@ -45,6 +45,7 @@ import { inactiveNodeNotificationService } from './services/inactiveNodeNotifica
 import { serverEventNotificationService } from './services/serverEventNotificationService.js';
 import { autoDeleteByDistanceService } from './services/autoDeleteByDistanceService.js';
 import { telegramService } from './services/telegramService.js';
+import { getBotResponse } from './services/aiBotService.js';
 import { getUserNotificationPreferencesAsync, saveUserNotificationPreferencesAsync, applyNodeNamePrefixAsync } from './utils/notificationFiltering.js';
 import { upgradeService } from './services/upgradeService.js';
 import { enhanceNodeForClient, filterNodesByChannelPermission, checkNodeChannelAccess, getEffectiveDbNodePosition } from './utils/nodeEnhancer.js';
@@ -9300,6 +9301,37 @@ apiRouter.post('/telegram/test-message', requireAdmin(), async (req, res) => {
 apiRouter.post('/telegram/reload', requireAdmin(), (_req, res) => {
   telegramService.invalidateCache();
   res.json({ ok: true });
+});
+
+// ─── AI Bot API ───────────────────────────────────────────────────────────────
+
+apiRouter.post('/bot/test', requireAdmin(), async (req, res) => {
+  try {
+    const { message, provider, apiKey, apiUrl, model, systemPrompt, maxTokens, maxChars, temperature } = req.body;
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'message is required' });
+    }
+    if (!apiKey || typeof apiKey !== 'string') {
+      return res.status(400).json({ error: 'apiKey is required' });
+    }
+    const response = await getBotResponse({
+      settings: {
+        provider: provider === 'claude' ? 'claude' : 'openai',
+        apiKey: apiKey.trim(),
+        apiUrl: apiUrl || '',
+        model: model || (provider === 'claude' ? 'claude-haiku-4-5-20251001' : 'gpt-4o-mini'),
+        systemPrompt: systemPrompt || 'You are a helpful assistant. Keep responses short.',
+        maxTokens: Number(maxTokens) || 150,
+        maxChars: Number(maxChars) || 200,
+        temperature: Number(temperature) || 0.7,
+      },
+      userMessage: message,
+      context: [],
+    });
+    res.json({ response });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? 'AI call failed' });
+  }
 });
 
 // Get configured Apprise URLs (admin only)
