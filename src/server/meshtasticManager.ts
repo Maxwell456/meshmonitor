@@ -11136,6 +11136,12 @@ class MeshtasticManager implements ISourceManager {
       result = result.replace(/{TRANSPORT}/g, encode(transport));
     }
 
+    // {RELAY_BYTE} - Raw last byte of the relaying node's number as decimal (e.g. "48"), straight from the packet header, empty if direct
+    if (result.includes('{RELAY_BYTE}')) {
+      const val = (relayNode && numberHops > 0) ? relayNode.toString(10) : '';
+      result = result.replace(/{RELAY_BYTE}/g, encode(val));
+    }
+
     // {RELAY_NODE} - Last 2 bytes of relay node ID as hex (e.g. "b920"), empty if direct
     if (result.includes('{RELAY_NODE}')) {
       const val = (relayNode && numberHops > 0)
