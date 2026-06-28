@@ -864,6 +864,11 @@ const PacketMonitorPanel: React.FC<PacketMonitorPanelProps> = ({ onClose, onNode
                                     title={isEstimate ? t('packet_monitor.estimated_relay') : t('packet_monitor.click_for_relay')}
                                   >
                                     {relayName || '?'}
+                                    {packet.relay_node !== undefined && packet.relay_node !== null && (
+                                      <span style={{ fontSize: '0.85em', opacity: 0.7, marginLeft: '4px' }}>
+                                        ({t('packet_monitor.relay_byte', { byte: packet.relay_node })})
+                                      </span>
+                                    )}
                                   </span>
                                 );
                               } else {

@@ -80,6 +80,17 @@ const HopCountDisplay: React.FC<HopCountDisplayProps> = ({
       }
     : {};
 
+  // Raw relay byte straight from the packet header (last byte of the relaying
+  // node's number). Shown only for actually relayed messages (hopCount > 0).
+  const RelayByteLabel = hopCount > 0 && relayNode !== undefined && relayNode !== null ? (
+    <span
+      style={{ fontSize: '0.75em', marginLeft: '4px', opacity: 0.7 }}
+      title={t('messages.relay_byte_tooltip')}
+    >
+      {t('messages.relay_byte', { byte: relayNode })}
+    </span>
+  ) : null;
+
   // For direct messages (0 hops), show SNR/RSSI if available
   if (hopCount === 0 && (rxSnr != null || rxRssi != null)) {
     const parts: string[] = [];
@@ -109,6 +120,7 @@ const HopCountDisplay: React.FC<HopCountDisplayProps> = ({
       >
         ({t('messages.hops', { count: hopCount, hopStart: hopStart })})
       </span>
+      {RelayByteLabel}
       {StoreForwardIndicator}
       {MqttIndicator}
     </>
