@@ -1202,6 +1202,7 @@
   "packet_monitor.no_preview": "[No preview]",
   "packet_monitor.click_for_relay": "Click to see potential relay nodes",
   "packet_monitor.estimated_relay": "Estimated relay (click for details)",
+  "packet_monitor.relay_byte": "Relay:{{byte}}",
   "packet_monitor.details_title": "Packet Details (Full JSON)",
   "packet_monitor.settings.disabled_warning": "Packet logging is currently disabled. No packets will be stored. Enable it in the section header above to start collecting packet data.",
   "packet_monitor.settings.max_packets": "Maximum Packets to Store",
@@ -2710,6 +2711,8 @@
   "messages.hops_other": "{{count}}/{{hopStart}} hops",
   "messages.signal_info": "Signal strength (SNR/RSSI) - Direct message",
   "messages.click_for_relay": "Click to see potential relay nodes",
+  "messages.relay_byte": "Relay:{{byte}}",
+  "messages.relay_byte_tooltip": "Last byte of the relaying node's number, taken directly from the packet header",
   "messages.via_mqtt": "Received via MQTT",
 
   "link_preview.loading": "Loading preview...",
