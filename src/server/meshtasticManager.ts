@@ -11058,10 +11058,10 @@ class MeshtasticManager implements ISourceManager {
       result = result.replace(/{NODE_ID}/g, encode(nodeId));
     }
 
-    // {LONG_NAME} - Sender node long name
+    // {LONG_NAME} - Sender node long name, falls back to the node's ID (e.g. "!909a1234") when unnamed
     if (result.includes('{LONG_NAME}')) {
       const node = await databaseService.nodes.getNode(fromNum, this.sourceId);
-      const longName = node?.longName || 'Unknown';
+      const longName = node?.longName || nodeId;
       result = result.replace(/{LONG_NAME}/g, encode(longName));
     }
 
