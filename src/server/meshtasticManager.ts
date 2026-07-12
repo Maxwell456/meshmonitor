@@ -39,6 +39,7 @@ import fs from 'fs';
 import path from 'path';
 import * as net from 'net';
 import { getBotResponse, splitIntoPackets, type BotSettings, type ChatMessage } from './services/aiBotService.js';
+import { buildMeshSnapshot, handleStatsCommand } from './services/meshAnalystService.js';
 
 const POST_RESET_COOLDOWN_MS = 5000;
 const TCP_READY_TIMEOUT_MS = 15000;
@@ -13677,6 +13678,27 @@ class MeshtasticManager implements ISourceManager {
 
       if (!userQuery) return;
 
+      // Fast-path: basic stats commands are answered straight from the DB —
+      // no LLM round-trip, works even without an API key.
+      const statsCommandsEnabled = await settings.getSettingForSource(sourceId, 'botStatsCommands');
+      if (statsCommandsEnabled !== 'false') {
+        const statsReply = await handleStatsCommand(userQuery, sourceId);
+        if (statsReply) {
+          const statsPackets = splitIntoPackets(statsReply, 2);
+          for (let i = 0; i < statsPackets.length; i++) {
+            if (i > 0) await new Promise(r => setTimeout(r, 2000));
+            if (isDM) {
+              await this.sendTextMessage(statsPackets[i], 0, message.fromNodeNum);
+            } else {
+              await this.sendTextMessage(statsPackets[i], message.channel);
+            }
+          }
+          this.botCooldowns.set(message.fromNodeNum, Date.now());
+          logger.info(`🤖 Stats command "${userQuery}" answered for node ${message.fromNodeNum} (${statsReply.length} chars)`);
+          return;
+        }
+      }
+
       // Load AI settings
       const provider = (await settings.getSettingForSource(sourceId, 'botProvider') || 'openai') as 'openai' | 'claude';
       const apiKey = await settings.getSettingForSource(sourceId, 'botApiKey') || '';
@@ -13717,15 +13739,30 @@ class MeshtasticManager implements ISourceManager {
         }
         ctxParts.push(fromParts.join(' '));
       }
-      ctxParts.push(`Mesh: ${allNodes.length} known nodes, ${onlineNodes.length} online (last 30min)`);
-      const nodeLines = onlineNodes.slice(0, 25).map(n => {
-        const name = n.longName || n.shortName || n.nodeId;
-        const relayByte = (n.nodeNum & 0xFF).toString(16).padStart(2, '0');
-        const hops = n.hopsAway != null ? ` ${n.hopsAway}h` : '';
-        const snr = n.snr != null ? ` SNR:${n.snr.toFixed(0)}` : '';
-        return `${name}(relay:${relayByte}${hops}${snr})`;
-      });
-      if (nodeLines.length > 0) ctxParts.push('Nodes: ' + nodeLines.join(', '));
+      // Analyst mode (default on): full mesh snapshot — nodes, telemetry,
+      // messages, topology, alerts — so the LLM can answer any question about
+      // the network. Falls back to the minimal context if disabled or on error.
+      const analystMode = await settings.getSettingForSource(sourceId, 'botAnalystMode');
+      let snapshotOk = false;
+      if (analystMode !== 'false') {
+        try {
+          ctxParts.push(await buildMeshSnapshot(sourceId));
+          snapshotOk = true;
+        } catch (err) {
+          logger.error('🤖 Mesh snapshot failed, using basic context:', err);
+        }
+      }
+      if (!snapshotOk) {
+        ctxParts.push(`Mesh: ${allNodes.length} known nodes, ${onlineNodes.length} online (last 30min)`);
+        const nodeLines = onlineNodes.slice(0, 25).map(n => {
+          const name = n.longName || n.shortName || n.nodeId;
+          const relayByte = (n.nodeNum & 0xFF).toString(16).padStart(2, '0');
+          const hops = n.hopsAway != null ? ` ${n.hopsAway}h` : '';
+          const snr = n.snr != null ? ` SNR:${n.snr.toFixed(0)}` : '';
+          return `${name}(relay:${relayByte}${hops}${snr})`;
+        });
+        if (nodeLines.length > 0) ctxParts.push('Nodes: ' + nodeLines.join(', '));
+      }
       const nodeContext: string = ctxParts.join('\n');
 
       // Fetch recent context messages

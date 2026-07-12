@@ -29,6 +29,8 @@ interface BotSettings {
   skipIncompleteNodes: boolean;
   contextMessages: number;
   appendNodeInfo: boolean;
+  analystMode: boolean;
+  statsCommands: boolean;
 }
 
 const DEFAULT_SETTINGS: BotSettings = {
@@ -48,6 +50,8 @@ const DEFAULT_SETTINGS: BotSettings = {
   skipIncompleteNodes: false,
   contextMessages: 3,
   appendNodeInfo: true,
+  analystMode: true,
+  statsCommands: true,
 };
 
 const PROVIDER_PRESETS: Record<BotProvider, { label: string; defaultUrl: string; defaultModel: string; placeholder: string }> = {
@@ -114,6 +118,8 @@ const AutoBotSection: React.FC<AutoBotSectionProps> = ({ channels, baseUrl }) =>
           skipIncompleteNodes: bool('botSkipIncompleteNodes', false),
           contextMessages: num('botContextMessages', 3),
           appendNodeInfo: bool('botAppendNodeInfo', true),
+          analystMode: bool('botAnalystMode', true),
+          statsCommands: bool('botStatsCommands', true),
         };
         setLocal(loaded);
         setSaved(loaded);
@@ -168,6 +174,8 @@ const AutoBotSection: React.FC<AutoBotSectionProps> = ({ channels, baseUrl }) =>
         botSkipIncompleteNodes: String(local.skipIncompleteNodes),
         botContextMessages: local.contextMessages,
         botAppendNodeInfo: String(local.appendNodeInfo),
+        botAnalystMode: String(local.analystMode),
+        botStatsCommands: String(local.statsCommands),
       };
       const res = await csrfFetch(`${baseUrl}/api/settings${sourceQuery}`, {
         method: 'POST',
@@ -458,6 +466,42 @@ const AutoBotSection: React.FC<AutoBotSectionProps> = ({ channels, baseUrl }) =>
             />
             <label htmlFor="bot-skip-incomplete" style={{ cursor: local.enabled ? 'pointer' : 'not-allowed', fontSize: '0.9rem' }}>
               Skip nodes without a name (ignore unknown nodes)
+            </label>
+          </div>
+        </div>
+
+        {/* Network Analyst */}
+        <div style={card}>
+          <div style={{ fontWeight: 700, marginBottom: '0.5rem', fontSize: '0.95rem' }}>📊 Network Analyst</div>
+          <div style={{ ...desc, marginBottom: '0.75rem' }}>
+            Turns the bot into a mesh network analyst: it gets a live snapshot of everything MeshMonitor
+            knows (nodes, telemetry, messages, topology, alerts) and can answer any question about the network.
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <input
+              type="checkbox"
+              id="bot-analyst-mode"
+              checked={local.analystMode}
+              onChange={e => update('analystMode', e.target.checked)}
+              disabled={!local.enabled}
+              style={{ width: 'auto', margin: 0 }}
+            />
+            <label htmlFor="bot-analyst-mode" style={{ cursor: local.enabled ? 'pointer' : 'not-allowed', fontSize: '0.9rem' }}>
+              Analyst mode — full mesh snapshot in every AI request (nodes, battery, SNR, messages, links)
+            </label>
+          </div>
+          <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <input
+              type="checkbox"
+              id="bot-stats-commands"
+              checked={local.statsCommands}
+              onChange={e => update('statsCommands', e.target.checked)}
+              disabled={!local.enabled}
+              style={{ width: 'auto', margin: 0 }}
+            />
+            <label htmlFor="bot-stats-commands" style={{ cursor: local.enabled ? 'pointer' : 'not-allowed', fontSize: '0.9rem' }}>
+              Quick stats commands — instant DB answers without the LLM:{' '}
+              <code>стат</code> <code>узлы</code> <code>бат</code> <code>топ</code> <code>снр</code> <code>дальность</code> <code>help</code>
             </label>
           </div>
         </div>
