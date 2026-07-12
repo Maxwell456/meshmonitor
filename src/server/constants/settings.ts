@@ -213,6 +213,8 @@ export const VALID_SETTINGS_KEYS = [
   'botSkipIncompleteNodes',
   'botContextMessages',
   'botAppendNodeInfo',
+  'botAnalystMode',
+  'botStatsCommands',
 ] as const;
 
 export type ValidSettingKey = typeof VALID_SETTINGS_KEYS[number];
